@@ -1,0 +1,376 @@
+rules_version = '2';
+
+/* ============================================================
+   ClearSky-OMEGA · MERGED rules for the clearsky-portal database
+   - OMEGA workspace /projects (unchanged, at the bottom)
+   - Financing portal: fin_profiles, fin_projects (+ offers, inquiries)
+   - Distribution Marketplace: mkt_profiles, mkt_distributors (+ catalog),
+     mkt_projects (+ quote, invoice, messages)
+   - Shared partnerAllowlist (PUBLIC read; OPEN registration)
+   - Tool registry /tools + /meta, and per-tenant /toolData
+   - Admin console shared data /admin
+
+   Marketplace registration:
+     developer   — OPEN (any signed-in user)
+     distributor — restricted to approved email domains (see
+                   isDistributorDomain). Add more domains there later.
+
+   Deploying replaces the WHOLE database's rules, so everything lives here.
+   ============================================================ */
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+    /* email-domain org id — used by the OMEGA projects rules + tool data */
+    function userOrg() {
+      return request.auth.token.email.split('@')[1];
+    }
+    /* internal ClearSky team — may publish the tool catalog, onboard
+       distributors, and administer the marketplace */
+    function isAdmin() {
+      return signedIn() && (
+        request.auth.token.email.matches('.*@clearsky-usa[.]com')
+        || request.auth.token.email.matches('.*@csebuilders[.]com')
+      );
+    }
+    function myProfile() {
+      return get(/databases/$(database)/documents/fin_profiles/$(request.auth.uid)).data;
+    }
+    function myRole() {
+      return myProfile().role;
+    }
+    function isDeveloper() {
+      return signedIn() && myRole() == 'developer';
+    }
+    function isPartner() {
+      return signedIn() && myRole() == 'partner';
+    }
+
+    /* ---------------- marketplace role helpers ---------------- */
+    function mktProfile() {
+      return get(/databases/$(database)/documents/mkt_profiles/$(request.auth.uid)).data;
+    }
+    function mktRole() {
+      return mktProfile().role;
+    }
+    function isMktDeveloper() {
+      return signedIn() && mktRole() == 'developer';
+    }
+    function isMktDistributor() {
+      return signedIn() && mktRole() == 'distributor';
+    }
+    function myDistId() {
+      return mktProfile().distributorId;
+    }
+    /* Approved distributor email domains. Add more here as you onboard
+       new distribution partners. */
+    function isDistributorDomain() {
+      return signedIn() && (
+        request.auth.token.email.matches('.*@clearsky-usa[.]com')
+        || request.auth.token.email.matches('.*@rexelusa[.]com')
+      );
+    }
+
+    /* ---------------- shared partner allowlist ----------------
+       PUBLIC read so any pre-auth signup flow can consult it.
+       Writes remain locked to the internal ClearSky team. */
+    match /partnerAllowlist/{email} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    /* ============================================================
+       ADMIN CONSOLE  —  shared internal source of truth.
+       ============================================================ */
+    match /admin/{docId} {
+      allow read:  if signedIn();
+      allow write: if signedIn();
+    }
+
+    /* ============================================================
+       TOOL REGISTRY
+       ============================================================ */
+    match /tools/{toolId} {
+      allow read:  if signedIn();
+      allow write: if isAdmin();
+    }
+    match /meta/{docId} {
+      allow read:  if signedIn();
+      allow write: if isAdmin();
+    }
+
+    /* ============================================================
+       PER-TENANT TOOL DATA
+       ============================================================ */
+    match /toolData/{orgId}/tools/{toolKey} {
+      allow read:  if signedIn() && (userOrg() == orgId || isAdmin());
+      allow write: if signedIn() &&  userOrg() == orgId;
+    }
+    match /toolData/{orgId}/prefs/{prefId} {
+      allow read:  if signedIn() && (userOrg() == orgId || isAdmin());
+      allow write: if signedIn() &&  userOrg() == orgId;
+    }
+
+    /* ---------------- Financing portal user profiles ----------------
+       OPEN registration: any signed-in user may create their own profile
+       as either 'developer' or 'partner'. No allowlist gate. */
+    match /fin_profiles/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.role in ['developer', 'partner'];
+
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.role == resource.data.role;
+
+      allow delete: if false;
+    }
+
+    /* ---------------- Financing portal projects ---------------- */
+    match /fin_projects/{projectId} {
+
+      function isOwner() {
+        return signedIn() && resource.data.developerUid == request.auth.uid;
+      }
+      function isAwardee() {
+        return signedIn() && resource.data.awardedTo == request.auth.uid;
+      }
+      function isBrowsable() {
+        // Partners browse only OPEN projects. 'closed' and 'awarded' excluded.
+        return resource.data.status == 'open';
+      }
+
+      // Read granted if you own it (developer), or you're a partner and it's
+      // browsable (open), or you're the awarded partner.
+      allow read: if isOwner()
+                  || (isPartner() && isBrowsable())
+                  || (isPartner() && isAwardee());
+
+      allow create: if isDeveloper()
+                    && request.resource.data.developerUid == request.auth.uid
+                    && request.resource.data.status == 'open'
+                    && request.resource.data.awardedTo == null;
+
+      // Owner (developer) may edit their own project (developerUid fixed).
+      // This also covers awarding and closing (status -> 'awarded' / 'closed').
+      allow update: if isOwner()
+                    && request.resource.data.developerUid == resource.data.developerUid;
+
+      // (No partner-side project update: the project stays 'open'. Each
+      //  partner's offer carries pending/rejected/accepted. Only the owner
+      //  changes project status — via the owner update rule above.)
+
+      allow delete: if isOwner() && resource.data.status != 'awarded';
+
+      match /offers/{offerId} {
+        function parent() {
+          return get(/databases/$(database)/documents/fin_projects/$(projectId)).data;
+        }
+        function parentOwner() {
+          return parent().developerUid == request.auth.uid;
+        }
+
+        allow read: if signedIn() && (
+                       parentOwner() ||
+                       (isPartner() && offerId == request.auth.uid)
+                    );
+
+        allow create, update: if isPartner()
+                    && offerId == request.auth.uid
+                    && request.resource.data.partnerUid == request.auth.uid
+                    && parent().status != 'awarded';
+
+        allow update: if parentOwner()
+                    || (isPartner() && offerId == request.auth.uid);
+
+        allow delete: if false;
+      }
+
+      match /inquiries/{msgId} {
+        function parent() {
+          return get(/databases/$(database)/documents/fin_projects/$(projectId)).data;
+        }
+        function parentOwner() {
+          return parent().developerUid == request.auth.uid;
+        }
+        function parentAwardee() {
+          return parent().awardedTo == request.auth.uid;
+        }
+        function parentBrowsable() {
+          return parent().status == 'open';
+        }
+
+        allow read: if signedIn() && (
+                       parentOwner() ||
+                       (isPartner() && (parentBrowsable() || parentAwardee()))
+                    );
+
+        allow create: if signedIn()
+                    && request.resource.data.authorUid == request.auth.uid
+                    && (
+                        parentOwner() ||
+                        (isPartner() && (parentBrowsable() || parentAwardee()))
+                       );
+
+        allow update, delete: if false;
+      }
+    }
+
+    /* ============================================================
+       DISTRIBUTION MARKETPLACE — mkt_*
+       Roles live in mkt_profiles (separate from fin_profiles so a
+       user can be a developer here without colliding there).
+
+       Registration:
+         developer   — OPEN (any signed-in user).
+         distributor — approved email domains only (isDistributorDomain),
+                       or created by an admin.
+       ============================================================ */
+
+    /* -------- marketplace profiles -------- */
+    match /mkt_profiles/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+
+      allow create: if signedIn() && request.auth.uid == uid
+        && (
+            request.resource.data.role == 'developer'
+            || isAdmin()
+            || (request.resource.data.role == 'distributor' && isDistributorDomain())
+           );
+
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.distributorId == resource.data.distributorId;
+
+      allow delete: if false;
+    }
+
+    /* -------- distributors (onboarded suppliers) -------- */
+    match /mkt_distributors/{distId} {
+      /* Every signed-in marketplace user may read distributor cards so
+         developers can pick who to submit to and browse catalogs. */
+      allow read: if signedIn();
+      /* Admin onboards distributors; a bound distributor-user may edit
+         their own distributor record. */
+      allow create: if isAdmin();
+      allow update: if isAdmin()
+                    || (isMktDistributor() && myDistId() == distId);
+      allow delete: if isAdmin();
+
+      /* -------- catalog products under a distributor -------- */
+      match /catalog/{productId} {
+        /* Any signed-in user may browse a distributor's catalog. */
+        allow read: if signedIn();
+        /* Only the owning distributor (or admin) may add / edit / remove
+           products. */
+        allow create, update, delete: if isAdmin()
+                    || (isMktDistributor() && myDistId() == distId);
+      }
+    }
+
+    /* -------- marketplace projects (developer -> distributor) -------- */
+    match /mkt_projects/{projectId} {
+      function isProjDev() {
+        return signedIn() && resource.data.developerUid == request.auth.uid;
+      }
+      function isTargetDistributor() {
+        return isMktDistributor() && resource.data.targetDistId == myDistId();
+      }
+      /* Read: the submitting developer, the targeted distributor, or admin. */
+      allow read: if isProjDev() || isTargetDistributor() || isAdmin();
+
+      allow create: if isMktDeveloper()
+                    && request.resource.data.developerUid == request.auth.uid
+                    && request.resource.data.status == 'submitted';
+
+      /* Developer may edit their own project (developerUid + targetDistId
+         fixed); the targeted distributor may advance status / attach
+         pricing; admin may do anything. */
+      allow update: if (isProjDev()
+                        && request.resource.data.developerUid == resource.data.developerUid
+                        && request.resource.data.targetDistId == resource.data.targetDistId)
+                    || isTargetDistributor()
+                    || isAdmin();
+
+      allow delete: if (isProjDev() && resource.data.status == 'submitted') || isAdmin();
+
+      /* quote, invoice, messages — same audience as the parent project. */
+      function pParent() {
+        return get(/databases/$(database)/documents/mkt_projects/$(projectId)).data;
+      }
+      function pIsDev() {
+        return signedIn() && pParent().developerUid == request.auth.uid;
+      }
+      function pIsDist() {
+        return isMktDistributor() && pParent().targetDistId == myDistId();
+      }
+
+      match /quote/{quoteId} {
+        allow read: if pIsDev() || pIsDist() || isAdmin();
+        allow create, update: if pIsDist() || isAdmin();
+        allow delete: if isAdmin();
+      }
+      match /invoice/{invoiceId} {
+        allow read: if pIsDev() || pIsDist() || isAdmin();
+        /* distributor issues the invoice; developer may update ONLY the
+           acknowledgement/paid flag on their side (provider + amount must
+           stay unchanged). Full Stripe status writes will come from a
+           serverless webhook using the admin SDK, which bypasses rules. */
+        allow create, update: if pIsDist() || isAdmin()
+                    || (pIsDev()
+                        && request.resource.data.provider == resource.data.provider
+                        && request.resource.data.amount == resource.data.amount);
+        allow delete: if isAdmin();
+      }
+      match /messages/{msgId} {
+        allow read: if pIsDev() || pIsDist() || isAdmin();
+        allow create: if signedIn()
+                    && request.resource.data.authorUid == request.auth.uid
+                    && (pIsDev() || pIsDist() || isAdmin());
+        allow update, delete: if false;
+      }
+    }
+
+    /* -------- saved carts (developer's private saved shopping carts) -------- */
+    match /mkt_saved_carts/{cartId} {
+      allow read: if signedIn() && (resource.data.ownerUid == request.auth.uid || isAdmin());
+      allow create: if signedIn()
+                    && request.resource.data.ownerUid == request.auth.uid;
+      allow update: if signedIn()
+                    && resource.data.ownerUid == request.auth.uid
+                    && request.resource.data.ownerUid == request.auth.uid;
+      allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    /* ============================================================
+       OMEGA workspace projects — UNCHANGED from your live rules.
+       ============================================================ */
+    match /projects/{projectId} {
+      // Read: org projects OR your own legacy (uid-only) projects
+      allow read: if request.auth != null
+                  && (
+                    resource.data.orgId == userOrg()
+                    || resource.data.uid == request.auth.uid
+                  );
+      allow create: if request.auth != null
+                    && request.resource.data.orgId == userOrg();
+      // UPDATE: you own the doc (by org or legacy uid), stamped with your org.
+      allow update: if request.auth != null
+                    && (
+                      resource.data.orgId == userOrg()
+                      || resource.data.uid == request.auth.uid
+                    )
+                    && request.resource.data.orgId == userOrg();
+      // DELETE: you own the doc. No request.resource check on deletes.
+      allow delete: if request.auth != null
+                    && (
+                      resource.data.orgId == userOrg()
+                      || resource.data.uid == request.auth.uid
+                    );
+    }
+
+  }
+}
