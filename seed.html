@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Seed Rexel Catalog · ClearSky-OMEGA</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', sans-serif; background: #0E1A24; color: #fff; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 40px 20px; }
+    .card { background: #16232E; border: 1px solid rgba(255,255,255,.1); border-radius: 16px; max-width: 560px; width: 100%; padding: 36px; }
+    h1 { font-family: 'Syne', sans-serif; font-size: 24px; font-weight: 800; margin-bottom: 6px; }
+    .sub { color: rgba(255,255,255,.6); font-size: 14px; line-height: 1.6; margin-bottom: 24px; }
+    .who { font-size: 13px; padding: 11px 14px; border-radius: 9px; margin-bottom: 20px; line-height: 1.5; }
+    .who.ok { background: rgba(18,128,92,.2); color: #7FE3BE; border: 1px solid rgba(18,128,92,.4); }
+    .who.bad { background: rgba(180,50,42,.2); color: #F0A79F; border: 1px solid rgba(180,50,42,.4); }
+    .who.wait { background: rgba(0,137,189,.16); color: #6FD3F5; border: 1px solid rgba(0,137,189,.4); }
+    button { font-family: inherit; width: 100%; padding: 14px; border: none; border-radius: 9px; font-size: 15px; font-weight: 600; cursor: pointer; background: #0089BD; color: #fff; transition: opacity .2s; }
+    button:hover { opacity: .9; }
+    button:disabled { opacity: .4; cursor: not-allowed; }
+    .log { margin-top: 20px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; line-height: 1.7; color: rgba(255,255,255,.8); max-height: 320px; overflow-y: auto; background: #0B1620; border: 1px solid rgba(255,255,255,.08); border-radius: 9px; padding: 14px; white-space: pre-wrap; display: none; }
+    .log.show { display: block; }
+    .note { margin-top: 18px; font-size: 12px; color: rgba(255,255,255,.45); line-height: 1.6; }
+    code { background: rgba(255,255,255,.1); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Seed Rexel Starter Catalog</h1>
+    <p class="sub">One-time tool. Creates the <b>Rexel Energy Solutions</b> distributor and a starter catalog of real Rexel BESS / EV / solar products. Safe to re-run \u2014 it updates in place rather than duplicating.</p>
+
+    <div class="who wait" id="who">Checking your sign-in\u2026</div>
+
+    <button id="seedBtn" disabled>Seed Rexel catalog</button>
+
+    <div class="log" id="log"></div>
+
+    <p class="note">Prices are placeholder list estimates \u2014 Rexel gates real pricing behind sign-in. Overwrite them later from the distributor's \u201cMy Catalog\u201d tab. When you're done seeding, delete <code>seed.html</code> from the repo.</p>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+  <script src="/firebase-config.js"></script>
+  <script>
+    var db = firebase.firestore();
+    var auth = firebase.auth();
+    var FieldValue = firebase.firestore.FieldValue;
+
+    var DIST_ID = "rexel-energy";
+
+    var distributor = {
+      name: "Rexel Energy Solutions",
+      slug: "rexel-energy",
+      location: "Charlotte, NC",
+      contact: "energy@rexelusa.com",
+      logo: "",
+      active: true,
+      apiEnabled: false,
+      apiUrl: "",
+      ownerUids: [],
+      updatedAt: FieldValue.serverTimestamp()
+    };
+
+    var products = [
+      { name: "Enphase IQ Battery 5P \u2014 5 kWh AC-coupled storage", brand: "Enphase", sku: "2142572", catNumber: "IQBATTERY-5P-1P-NA", upc: "", category: "bess", uom: "ea", unitPrice: 2199.00, stockStatus: "in", stockQty: 24, leadTimeDays: 2, description: "IQ Battery 5P, 16 Amp, 3.84 kW continuous, 5 kWh usable, (6) embedded IQ8D-BAT microinverters, LFP, NEMA 3R. Includes cover and wall-mount bracket. 15-yr warranty." },
+      { name: "Enphase IQ Battery 5P Kit \u2014 Made in USA (DOM)", brand: "Enphase", sku: "2478119", catNumber: "IQBATTERY-5P-1P-NA-DOM", upc: "", category: "bess", uom: "ea", unitPrice: 2299.00, stockStatus: "order", stockQty: null, leadTimeDays: 10, description: "IQ Battery 5P kit assembly. Includes one IQ Battery 5P, cover kit, and wall-mount bracket with top-shield. Domestic content." },
+      { name: "Enphase IQ System Controller 3 \u2014 160 A", brand: "Enphase", sku: "2142579", catNumber: "SC200D111C240US01", upc: "", category: "bess", uom: "ea", unitPrice: 1249.00, stockStatus: "in", stockQty: 15, leadTimeDays: 2, description: "IQ System Controller 3/3G, 160 A. Grid isolation and backup transition for Enphase Energy Systems with IQ Battery." },
+      { name: "Enphase IQ8M Microinverter", brand: "Enphase", sku: "2030218", catNumber: "IQ8M-72-M-US", upc: "", category: "bess", uom: "ea", unitPrice: 129.00, stockStatus: "in", stockQty: 340, leadTimeDays: 2, description: "IQ8M microinverter, MC4 connector, 60 V DC, 330 VA, Class II double-insulated enclosure. For 60\u201372 cell PV modules." },
+      { name: "Enphase 40 A 2-Pole Breaker (10-circuit)", brand: "Enphase", sku: "2291696", catNumber: "BRK-40A-2P-240V-10", upc: "", category: "gear", uom: "ea", unitPrice: 39.00, stockStatus: "in", stockQty: 88, leadTimeDays: 2, description: "40 A, 2-pole, 240 V breaker for the IQ System Controller and IQ Combiner-4. 10-circuit pack." },
+      { name: "Enphase Cellular Modem (M1, 6-yr)", brand: "Enphase", sku: "2260813", catNumber: "COMMS-CELLMODEM-M1-06", upc: "", category: "connectivity", uom: "ea", unitPrice: 249.00, stockStatus: "in", stockQty: 42, leadTimeDays: 2, description: "COMMS-CELLMODEM-M1-06 cellular modem for the IQ Gateway. 6-year data plan for sites without reliable broadband." },
+      { name: "Enphase Q Cable Female Connector (bag of 10)", brand: "Enphase", sku: "1126247", catNumber: "Q-CONN-10F", upc: "", category: "cable", uom: "bag", unitPrice: 74.00, stockStatus: "in", stockQty: 60, leadTimeDays: 2, description: "Female field-wireable Q connector for Q cable. Bag of 10. For terminating Enphase AC trunk cable runs." }
+    ];
+
+    function isAdminEmail(email) {
+      if (!email) { return false; }
+      var e = email.toLowerCase();
+      return /@clearsky-usa\.com$/.test(e) || /@csebuilders\.com$/.test(e);
+    }
+
+    function log(msg) {
+      var el = document.getElementById("log");
+      el.className = "log show";
+      el.textContent += msg + "\n";
+      el.scrollTop = el.scrollHeight;
+    }
+
+    auth.onAuthStateChanged(function (user) {
+      var who = document.getElementById("who");
+      var btn = document.getElementById("seedBtn");
+      if (!user) {
+        who.className = "who bad";
+        who.innerHTML = "Not signed in. Open the marketplace, log in with your <b>@csebuilders.com</b> admin account, then reload this page.";
+        btn.disabled = true;
+        return;
+      }
+      if (!isAdminEmail(user.email)) {
+        who.className = "who bad";
+        who.innerHTML = "Signed in as <b>" + user.email + "</b> \u2014 not an admin. Only @csebuilders.com / @clearsky-usa.com accounts can seed. Sign in as admin and reload.";
+        btn.disabled = true;
+        return;
+      }
+      who.className = "who ok";
+      who.innerHTML = "Signed in as admin: <b>" + user.email + "</b>. Ready to seed.";
+      btn.disabled = false;
+    });
+
+    document.getElementById("seedBtn").onclick = function () {
+      var btn = this;
+      btn.disabled = true;
+      btn.textContent = "Seeding\u2026";
+      var distRef = db.collection("mkt_distributors").doc(DIST_ID);
+
+      distRef.set(distributor, { merge: true }).then(function () {
+        log("\u2713 Distributor upserted: " + DIST_ID + " (" + distributor.name + ")");
+        var chain = Promise.resolve();
+        products.forEach(function (p) {
+          chain = chain.then(function () {
+            var docId = String(p.catNumber || p.sku).replace(/[^A-Za-z0-9_-]/g, "_");
+            var data = {};
+            for (var k in p) { if (p.hasOwnProperty(k)) { data[k] = p[k]; } }
+            data.active = true;
+            data.imageUrl = data.imageUrl || "";
+            data.updatedAt = FieldValue.serverTimestamp();
+            return distRef.collection("catalog").doc(docId).set(data, { merge: true }).then(function () {
+              log("  + " + p.name + "  (CAT " + p.catNumber + ")");
+            });
+          });
+        });
+        return chain;
+      }).then(function () {
+        log("\n\u2713 Done \u2014 " + products.length + " products seeded.");
+        log("Open Catalog & Shop as a developer to browse Rexel.");
+        log("Now delete seed.html from the repo.");
+        btn.textContent = "Seeded \u2713";
+      })["catch"](function (err) {
+        log("\u2717 Error: " + (err && err.message ? err.message : err));
+        btn.disabled = false;
+        btn.textContent = "Retry seed";
+      });
+    };
+  </script>
+</body>
+</html>
